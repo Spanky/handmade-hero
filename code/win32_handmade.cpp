@@ -1,5 +1,56 @@
 #include <windows.h>
 
+#define internal static
+#define local_persist static
+#define global_variable static
+
+global_variable bool ourIsRunning;
+
+global_variable BITMAPINFO ourBitmapInfo;
+global_variable void* ourBitMapMemory;
+global_variable HBITMAP ourBitmapHandle;
+global_variable HDC ourDeviceContext;
+
+internal void Win32ResizeDIBSection(int aWidth, int aHeight)
+{
+	// TODO(scarroll): Bulletproof this
+	//		Maybe don't free first, free after, then free first if that fails.
+
+	if(ourBitmapHandle)
+	{
+		DeleteObject(ourBitmapHandle);
+	}
+	
+	if(!ourDeviceContext)
+	{
+		// TODO(scarroll): Should we recreate these under special circumstances
+		ourDeviceContext = CreateCompatibleDC(0);
+	}
+
+	ourBitmapInfo.bmiHeader.biSize = sizeof(ourBitmapInfo.bmiHeader);
+	ourBitmapInfo.bmiHeader.biWidth = aWidth;
+	ourBitmapInfo.bmiHeader.biHeight = aHeight;
+	ourBitmapInfo.bmiHeader.biPlanes = 1;
+	ourBitmapInfo.bmiHeader.biBitCount = 32;
+	ourBitmapInfo.bmiHeader.biCompression = BI_RGB;\
+
+	ourBitmapHandle = CreateDIBSection(
+		ourDeviceContext, &ourBitmapInfo,
+		DIB_RGB_COLORS,
+		&ourBitMapMemory,
+		0, 0);
+}
+
+internal void Win32UpdateWindow(HDC aDeviceContext, int anX, int aY,  int aWidth, int aHeight)
+{
+	StretchDIBits(aDeviceContext,
+		anX, aY, aWidth, aHeight,
+		anX, aY, aWidth, aHeight,
+		ourBitMapMemory,
+		&ourBitmapInfo,
+		DIB_RGB_COLORS, SRCCOPY);
+}
+
 
 LRESULT CALLBACK WindowProc(
 	HWND   aWindowHandle,
@@ -13,7 +64,11 @@ LRESULT CALLBACK WindowProc(
 	{
 	case WM_SIZE:
 	{
-		OutputDebugStringA("WM_SIZE\n");
+		RECT clientRect;
+		GetClientRect(aWindowHandle, &clientRect);
+		int width = clientRect.right - clientRect.left;
+		int height = clientRect.bottom - clientRect.top;
+		Win32ResizeDIBSection(width, height);
 	}
 	break;
 
@@ -25,6 +80,7 @@ LRESULT CALLBACK WindowProc(
 
 	case WM_CLOSE:
 	{
+		PostQuitMessage(0);
 		OutputDebugStringA("WM_CLOSE\n");
 	}
 	break;
@@ -46,15 +102,6 @@ LRESULT CALLBACK WindowProc(
 		LONG y = paint.rcPaint.top;
 
 		static DWORD operation = WHITENESS;
-		if(operation == WHITENESS)
-		{
-			operation = BLACKNESS;
-		}
-		else
-		{
-			operation = WHITENESS;
-		}
-
 		PatBlt(deviceContext, x, y, width, height, operation);
 
 		EndPaint(aWindowHandle, &paint);
@@ -110,7 +157,7 @@ int CALLBACK WinMain(
 			for(;;)
 			{
 				BOOL messageResult = GetMessage(&message, 0, 0, 0);
-				if(messageResult >= 0)
+				if(messageResult > 0)
 				{
 					TranslateMessage(&message);
 					DispatchMessage(&message);
