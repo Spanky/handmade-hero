@@ -4,25 +4,48 @@
 #define local_persist static
 #define global_variable static
 
-global_variable bool ourIsRunning;
-
-global_variable BITMAPINFO ourBitmapInfo;
-global_variable void* ourBitMapMemory;
-global_variable int ourBitmapWidth;
-global_variable int ourBitmapHeight;
-global_variable int ourBytesPerPixel;
-
 using uint8 = unsigned char;
 using uint32 = unsigned int;
 
-void RenderWeirdGradient(uint8 anXOffset, uint8 aYOffset)
+
+struct win32_offsceen_buffer
 {
-	const auto pitch = ourBitmapWidth * ourBytesPerPixel;
-	uint8* row = (uint8*)ourBitMapMemory;
-	for (int y = 0; y < ourBitmapHeight; y++)
+	BITMAPINFO myInfo;
+	void* myMemory;
+	int myWidth;
+	int myHeight;
+	int myBytesPerPixel;
+	int myPitch;
+};
+
+struct win32_window_dimension
+{
+	int myWidth;
+	int myHeight;
+};
+
+global_variable bool ourIsRunning;
+global_variable win32_offsceen_buffer GlobalBackBuffer;
+
+internal win32_window_dimension Win32GetWindowDimension(HWND aWindow)
+{
+	win32_window_dimension windowDimension;
+	
+	RECT clientRect;
+	GetClientRect(aWindow, &clientRect);
+	windowDimension.myWidth = clientRect.right - clientRect.left;
+	windowDimension.myHeight = clientRect.bottom - clientRect.top;
+
+	return windowDimension;
+}
+
+internal void RenderWeirdGradient(const win32_offsceen_buffer* aBuffer, uint8 anXOffset, uint8 aYOffset)
+{
+	uint8* row = (uint8*)aBuffer->myMemory;
+	for (int y = 0; y < aBuffer->myHeight; y++)
 	{
 		uint32* pixels = (uint32*)row;
-		for (int x = 0; x < ourBitmapWidth; x++)
+		for (int x = 0; x < aBuffer->myWidth; x++)
 		{
 			// Memory Layout: 00 00 00 00
 			// Pixel Layout:  0xAARRGGBB
@@ -35,49 +58,49 @@ void RenderWeirdGradient(uint8 anXOffset, uint8 aYOffset)
 			(*pixels++) = ((g << 8) | (b));
 		}
 
-		row += pitch;
+		row += aBuffer->myPitch;
 	}
 }
 
-internal void Win32ResizeDIBSection(int aWidth, int aHeight)
+internal void Win32ResizeDIBSection(win32_offsceen_buffer* aBuffer, int aWidth, int aHeight)
 {
 	// TODO(scarroll): Bulletproof this
 	//		Maybe don't free first, free after, then free first if that fails.
 
-	if (ourBitMapMemory)
+	if (aBuffer->myMemory)
 	{
-		VirtualFree(ourBitMapMemory, 0, MEM_RELEASE);
-		ourBitMapMemory = nullptr;
+		VirtualFree(aBuffer->myMemory, 0, MEM_RELEASE);
+		aBuffer->myMemory = nullptr;
 	}
 	
-	ourBitmapInfo.bmiHeader.biSize = sizeof(ourBitmapInfo.bmiHeader);
-	ourBitmapInfo.bmiHeader.biWidth = aWidth;
-	ourBitmapInfo.bmiHeader.biHeight = -aHeight;
-	ourBitmapInfo.bmiHeader.biPlanes = 1;
-	ourBitmapInfo.bmiHeader.biBitCount = 32;
-	ourBitmapInfo.bmiHeader.biCompression = BI_RGB;
+	aBuffer->myInfo.bmiHeader.biSize = sizeof(aBuffer->myInfo.bmiHeader);
+	aBuffer->myInfo.bmiHeader.biWidth = aWidth;
+	aBuffer->myInfo.bmiHeader.biHeight = -aHeight;
+	aBuffer->myInfo.bmiHeader.biPlanes = 1;
+	aBuffer->myInfo.bmiHeader.biBitCount = 32;
+	aBuffer->myInfo.bmiHeader.biCompression = BI_RGB;
 
-	ourBytesPerPixel = ourBitmapInfo.bmiHeader.biBitCount / 8;
-	const auto requiredMemorySize = aWidth * aHeight * ourBytesPerPixel;
-	ourBitMapMemory = VirtualAlloc(nullptr, requiredMemorySize, MEM_COMMIT, PAGE_READWRITE);
+	aBuffer->myBytesPerPixel = aBuffer->myInfo.bmiHeader.biBitCount / 8;
+	const auto requiredMemorySize = aWidth * aHeight * aBuffer->myBytesPerPixel;
+	aBuffer->myMemory = VirtualAlloc(nullptr, requiredMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
-	ourBitmapWidth = aWidth;
-	ourBitmapHeight = aHeight;
+	aBuffer->myWidth = aWidth;
+	aBuffer->myHeight = aHeight;
 
-	RenderWeirdGradient(0, 0);
+	aBuffer->myPitch = aWidth * aBuffer->myBytesPerPixel;
+
+	RenderWeirdGradient(aBuffer, 0, 0);
 
 }
 
-internal void Win32UpdateWindow(HDC aDeviceContext, RECT* aClientRect)
+internal void Win32DisplayBufferInWindow(HDC aDeviceContext, const win32_offsceen_buffer* aBuffer, int aWidth, int aHeight)
 {
-	const auto windowWidth = aClientRect->right - aClientRect->left;
-	const auto windowHeight = aClientRect->bottom - aClientRect->top;
-	
+	// TODO(scarroll): Aspect ratio correction
 	StretchDIBits(aDeviceContext,
-		0, 0, windowWidth, windowHeight,
-		0, 0, ourBitmapWidth, ourBitmapHeight,
-		ourBitMapMemory,
-		&ourBitmapInfo,
+		0, 0, aWidth, aHeight,
+		0, 0, aBuffer->myWidth, aBuffer->myHeight,
+		aBuffer->myMemory,
+		&aBuffer->myInfo,
 		DIB_RGB_COLORS, SRCCOPY);
 }
 
@@ -94,11 +117,6 @@ LRESULT CALLBACK WindowProc(
 	{
 	case WM_SIZE:
 	{
-		RECT clientRect;
-		GetClientRect(aWindowHandle, &clientRect);
-		int width = clientRect.right - clientRect.left;
-		int height = clientRect.bottom - clientRect.top;
-		Win32ResizeDIBSection(width, height);
 	}
 	break;
 
@@ -126,9 +144,8 @@ LRESULT CALLBACK WindowProc(
 		PAINTSTRUCT paint;
 		HDC deviceContext = BeginPaint(aWindowHandle, &paint);
 
-		RECT clientRect;
-		GetClientRect(aWindowHandle, &clientRect);
-		Win32UpdateWindow(deviceContext, &clientRect);
+		win32_window_dimension windowDimension = Win32GetWindowDimension(aWindowHandle);
+		Win32DisplayBufferInWindow(deviceContext, &GlobalBackBuffer, windowDimension.myWidth, windowDimension.myHeight);
 		EndPaint(aWindowHandle, &paint);
 	}
 	break;
@@ -151,8 +168,10 @@ int CALLBACK WinMain(
 	LPSTR aCmdLine,
 	int aCmdShow)
 {
+	Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
+
 	WNDCLASS windowClass = {};
-	windowClass.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+	windowClass.style = CS_HREDRAW | CS_VREDRAW;
 	windowClass.lpfnWndProc = WindowProc;
 	windowClass.hInstance = GetModuleHandle(nullptr);
 	windowClass.lpszClassName = L"HandmadeHeroWindowClass";
@@ -195,12 +214,12 @@ int CALLBACK WinMain(
 					DispatchMessage(&message);
 				}
 				
-				RenderWeirdGradient(xOffset, yOffset);
+				RenderWeirdGradient(&GlobalBackBuffer, xOffset, yOffset);
 
 				HDC deviceContext = GetDC(windowHandle);
-				RECT clientRect;
-				GetClientRect(windowHandle, &clientRect);
-				Win32UpdateWindow(deviceContext, &clientRect);
+
+				win32_window_dimension windowDimension = Win32GetWindowDimension(windowHandle);
+				Win32DisplayBufferInWindow(deviceContext, &GlobalBackBuffer, windowDimension.myWidth, windowDimension.myHeight);
 				ReleaseDC(windowHandle, deviceContext);
 
 				xOffset += 1;
