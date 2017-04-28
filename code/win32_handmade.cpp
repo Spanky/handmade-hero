@@ -73,6 +73,8 @@ internal void Win32ResizeDIBSection(win32_offsceen_buffer* aBuffer, int aWidth, 
 		aBuffer->myMemory = nullptr;
 	}
 	
+	// NOTE(scarroll): When the biHeight field is negative, it is a clue to windows to
+	// create a top-left based bitmap rather than a bottom-left based bitmap.
 	aBuffer->myInfo.bmiHeader.biSize = sizeof(aBuffer->myInfo.bmiHeader);
 	aBuffer->myInfo.bmiHeader.biWidth = aWidth;
 	aBuffer->myInfo.bmiHeader.biHeight = -aHeight;
@@ -152,7 +154,6 @@ LRESULT CALLBACK WindowProc(
 
 	default:
 	{
-		//OutputDebugStringA("default\n");
 		result = DefWindowProc(aWindowHandle, aMessage, aWParam, aLParam);
 	}
 	break;
@@ -228,13 +229,13 @@ int CALLBACK WinMain(
 		}
 		else
 		{
-			// TODO: Handle a window failing to create
+			// TODO(scarroll): Handle a window failing to create
 		}
 
 	}
 	else
 	{
-		// TODO: Handle a window class failing to register
+		// TODO(scarroll): Handle a window class failing to register
 	}
 
 	return 0;
